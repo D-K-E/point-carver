@@ -7,4 +7,6 @@ namespace pcarver {
 typedef double real;
 typedef unsigned int col;
 typedef unsigned int row;
+
+typedef std::vector<std::vector<real>> smat;
 };

@@ -2,92 +2,103 @@
 // image utilities
 #include <debug.hpp>
 #include <precision.hpp>
+#include <utils.hpp>
+#include <vec3.hpp>
 
 using namespace pcarver;
 
 namespace pcarver {
 
-/**
-  \brief cast vector values to DestType type
-
-  \param vs vector whose values are going to be cast
-  \param fn cast, transform function
-
-  \return ds vector in DestType
- */
-template <typename SrcType, typename DestType>
-inline std::vector<DestType>
-cast_vec(const std::vector<SrcType> &vs,
-         const std::function<DestType(SrcType)> &fn) {
-  std::vector<DestType> ds;
-  ds.resize(vs.size());
-  for (std::size_t i = 0; i < vs.size(); i++) {
-    ds[i] = fn(vs[i]);
-  }
-  return ds;
-}
-
-/**
-  \brief cast vector values to DestType type
-
-  \param vs vector whose values are going to be cast
-  \param fn cast, transform function
-
-  \return vector in DestType
- */
-template <typename SrcType, typename DestType>
-inline std::vector<DestType>
-cast_vec(const std::vector<SrcType> &vs) {
-  return cast_vec<SrcType, DestType>(
-      vs, [](auto i) { return static_cast<DestType>(i); });
-}
-
-typedef std::vector<std::vector<real>> immat;
+typedef std::vector<std::vector<tricolor>> immat;
 
 struct imcoord {
   row y;
   col x;
 };
 
+immat read_image(const std::string &img_path) {
+  int w;
+  int h;
+  int nb_channels;
+  unsigned char *data =
+      stbi_load(img_path.c_str(), &w, &h, &nb_channels, 0);
+  row height = static_cast<unsigned int>(h);
+  col width = static_cast<unsigned int>(w);
+  unsigned int bytes_per_scanline = nb_channels * width;
+  immat img;
+  for (row i = 0; i < height; i++) {
+    std::vector<tricolor> row_vec;
+    row_vec.resize(width);
+    img.push_back(row_vec);
+    for (col j = 0; j < width; j++) {
+      auto pixel =
+          data + i * bytes_per_scanline + j * nb_channels;
+      tricolor tcolor(pixel[0], pixel[1], pixel[2]);
+      img[i][j] = tcolor;
+    }
+  }
+  return img;
+}
+
 struct ImgRect {
   immat pixels;
   imcoord bottom_left;
   ImgRect(const imcoord &coords, const immat &pixs)
-      : bottom_left(coords), pixels(pixs) {}
-  std::vector<real> get_row(row index) const {
+      : pixels(pixs), bottom_left(coords) {}
+  ImgRect(const std::string &impath) {
+    pixels = read_image(impath);
+    imcoord coord;
+    coord.y = pixels.size();
+    coord.x = 0;
+    bottom_left = coord;
+  }
+  std::vector<tricolor> get_row(row index) const {
 
     COMP_CHECK_MSG(index > 0 || index < pixels.size(),
                    index, pixels.size(),
                    "given row index is out of bounds");
     return pixels[index];
   }
-  std::vector<real> get_col(col index) const {
+  std::vector<tricolor> get_col(col index) const {
 
     COMP_CHECK_MSG(index > 0 || index < pixels[0].size(),
                    index, pixels[0].size(),
                    "given column index is out of bounds");
-    std::vector<real> imcol(0, pixels.size());
+    std::vector<tricolor> imcol(0, pixels.size());
     for (row i = 0; i < pixels.size(); i++) {
       auto rvec = pixels[i];
       imcol[i] = rvec[index];
     }
     return imcol;
   }
-  real get_pixel(row y, col x) const {
+  tricolor get_pixel(row y, col x) const {
     auto rvec = get_row(y);
     COMP_CHECK_MSG(x > 0 || x < rvec.size(), x, rvec.size(),
                    "given column value is out of bounds");
     return rvec[x];
   }
-  real get_pixel(const imcoord &coord) const {
+  tricolor get_pixel(const imcoord &coord) const {
     return get_pixel(coord.y, coord.x);
   }
+  real pixel_sum(row y, col x) const {
+    auto pix = get_pixel(y, x);
+    return pix.sum();
+  }
+  real sum() const {
+    real s = 0;
+    for (const auto &rvec : pixels) {
+      for (const auto &cval : rvec) {
+        s += cval.sum();
+      }
+    }
+    return s;
+  }
 
-  std::vector<real> rowsum() const {
-    std::vector<real> row_vec(0, pixels.size());
+  std::vector<tricolor> rowsum() const {
+    std::vector<tricolor> row_vec(0, pixels.size());
     for (row i = 0; i < pixels.size(); i++) {
       const auto &rvec = pixels[i];
-      real row_counter = 0;
+      tricolor row_counter(0.0);
       for (const auto &cval : rvec) {
         row_counter += cval;
       }
@@ -95,10 +106,10 @@ struct ImgRect {
     }
     return row_vec;
   }
-  std::vector<real> colsum() const {
-    std::vector<real> col_vec(0, pixels[0].size());
+  std::vector<tricolor> colsum() const {
+    std::vector<tricolor> col_vec(0, pixels[0].size());
     for (col j = 0; j < pixels[0].size(); j++) {
-      real col_counter = 0;
+      tricolor col_counter(0.0);
       for (const auto &rvec : pixels) {
         col_counter += rvec[j];
       }
@@ -107,46 +118,52 @@ struct ImgRect {
     return col_vec;
   }
   /**returns maximum pixel value in the image part*/
-  real max(row &y, col &x) {
+  tricolor max(row &y, col &x) {
     real temp = FLT_MIN;
+    tricolor tval(0.0);
     for (row i = 0; i < pixels.size(); i++) {
       for (col j = 0; j < pixels[0].size(); j++) {
-        real cval = get_pixel(i, j);
-        if (cval > temp) {
-          temp = cval;
+        tricolor cval = get_pixel(i, j);
+        auto ctemp = cval.sum();
+        if (ctemp > temp) {
+          temp = ctemp;
           y = i;
           x = j;
+          tval = cval;
         }
       }
     }
-    return temp;
+    return tval;
   }
   /**returns minimum pixel value in the image part*/
-  real min(row &y, col &x) {
+  tricolor min(row &y, col &x) {
     real temp = FLT_MAX;
+    tricolor tval(0.0);
     for (row i = 0; i < pixels.size(); i++) {
       for (col j = 0; j < pixels[0].size(); j++) {
-        real cval = get_pixel(i, j);
-        if (cval < temp) {
-          temp = cval;
+        tricolor cval = get_pixel(i, j);
+        auto ctemp = cval.sum();
+        if (ctemp < temp) {
+          temp = ctemp;
           y = i;
           x = j;
+          tval = cval;
         }
       }
     }
-    return temp;
+    return tval;
   }
-  real min() {
+  tricolor min() {
     row y = 0;
     col x = 0;
     return min(y, x);
   }
-  real max() {
+  tricolor max() {
     row y = 0;
     col x = 0;
     return max(y, x);
   }
-  real min(imcoord &coords) {
+  tricolor min(imcoord &coords) {
     row y = 0;
     col x = 0;
     auto val = min(y, x);
@@ -154,7 +171,7 @@ struct ImgRect {
     coords.x = x;
     return val;
   }
-  real max(imcoord &coords) {
+  tricolor max(imcoord &coords) {
     row y = 0;
     col x = 0;
     auto val = max(y, x);
